@@ -28,6 +28,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.8.0",
     "azure-kusto-data": "^6.0.3",
+    "dotenv": "^16.4.7",
     "sqlite3": "^5.1.7",
     "zod-to-json-schema": "^3.24.5"
   }

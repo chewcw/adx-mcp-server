@@ -4,7 +4,8 @@ import { Client, KustoConnectionStringBuilder } from "azure-kusto-data"
 import { z } from "zod"
 import sqlite3 from "sqlite3"
 import { promisify } from "util"
-import { ListResourcesRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js"
+import { ListResourcesRequestSchema, ListResourceTemplatesRequestSchema, ReadResourceRequestSchema, Resource } from "@modelcontextprotocol/sdk/types.js"
+import { config } from "dotenv"
 
 class AdxMcpServer {
   private server: any
@@ -28,20 +29,20 @@ class AdxMcpServer {
   }
 
   initialize() {
-    this.registerSchemaResource()
-    this.registerConfigResource()
+    this.registerResources()
+    this.registerResourceTemplates()
     this.registerQueryTool()
     return this
   }
 
-  private registerSchemaResource() {
+  private registerResources() {
     this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
       return {
         resources: [
           {
-            uri: "schema://main",
-            name: "Schema",
-            description: "Schema of the database",
+            uri: "config://azure-data-explorer-creds",
+            name: "Config",
+            description: "Config of the Azure Data Explorer",
           },
         ]
       }
@@ -49,79 +50,70 @@ class AdxMcpServer {
 
     this.server.setRequestHandler(ReadResourceRequestSchema, async (request: { params: { uri: any } }) => {
       const uri = request.params.uri
-      if (uri.startsWith("schema://main")) {
-        const db = this.getDb()
-        try {
-          const tables = await db.all(
-            "SELECT sql FROM sqlite_master WHERE type='table'",
-          )
-          return {
-            contents: [{
-              uri: uri,
-              name: "Schema",
-              mimeType: "text/plain",
-              text: tables.map((t: { sql: string }) => t.sql).join("\n"),
-            }],
-          }
-        } finally {
-          await db.close()
+
+      if (uri.startsWith("config://azure-data-explorer-creds")) {
+        return {
+          contents: [
+            {
+              uri: "config://azure-data-explorer-creds/cluster-name",
+              name: "Cluster Name",
+              text: `${process.env.ADX_CLUSTER_NAME}`,
+            },
+            {
+              uri: "config://azure-data-explorer-creds/client-id",
+              name: "Client ID",
+              text: `${process.env.ADX_CLIENT_ID}`,
+            },
+            {
+              uri: "config://azure-data-explorer-creds/client-secret",
+              name: "Client Secret",
+              text: `${process.env.ADX_CLIENT_SECRET}`,
+            },
+            {
+              uri: "config://azure-data-explorer-creds/tenant-id",
+              name: "Tenant ID",
+              text: `${process.env.ADX_TENANT_ID}`,
+            },
+          ],
         }
       }
     })
-
-    // this.server.resource(
-    //   "schema",
-    //   "schema://main",
-    //   async (uri: { href: string }) => {
-    //     const db = this.getDb()
-    //     try {
-    //       const tables = await db.all(
-    //         "SELECT sql FROM sqlite_master WHERE type='table'",
-    //       )
-    //       return {
-    //         contents: [{
-    //           uri: uri.href,
-    //           text: tables.map((t: { sql: string }) => t.sql).join("\n"),
-    //         }],
-    //       }
-    //     } finally {
-    //       await db.close()
-    //     }
-    //   },
-    // )
   }
 
-  private registerConfigResource() {
-    // this.server.resource(
-    //   "config",
-    //   "config://azure-data-explorer-creds",
-    //   async (_: { href: string }) => {
-    //     return {
-    //       contents: [
-    //         {
-    //           uri: "config://azure-data-explorer-creds/cluster-name",
-    //           name: "Cluster Name",
-    //           text: `${process.env.ADX_CLUSTER_NAME}`,
-    //         },
-    //         {
-    //           uri: "config://azure-data-explorer-creds/client-id",
-    //           name: "Client ID",
-    //           text: `${process.env.ADX_CLIENT_ID}`,
-    //         },
-    //         {
-    //           uri: "config://azure-data-explorer-creds/client-secret",
-    //           name: "Client Secret",
-    //           text: `${process.env.ADX_CLIENT_SECRET}`,
-    //         },
-    //         {
-    //           uri: "config://azure-data-explorer-creds/tenant-id",
-    //           name: "Tenant ID",
-    //           text: `${process.env.ADX_TENANT_ID}`,
-    //         },
-    //       ],
-    //     }
-    //   }
-    // )
+  private registerResourceTemplates() {
+    this.server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => {
+      return {
+        resourceTemplates: [
+          {
+            uriTemplate: "schema://adx/{db}/{table}",
+            name: "Schema",
+            description: "Schema of the given db and table",
+          },
+        ]
+      }
+    })
+
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request: { params: { uri: any } }) => {
+      const uri = request.params.uri
+      if (uri.startsWith("schema://adx")) {
+        const db = uri.split("/")[3]
+        const table = uri.split("/")[4]
+        if (!this.client) {
+          throw new Error("Database client is not initialized")
+        }
+        const query = `${table} | getschema`
+        const response = await this.client.execute(db, query)
+        const result = response.primaryResults[0].toString()
+        return {
+          contents: [{
+            uri: uri,
+            name: `Schema of the table ${table}`,
+            mimeType: "text/plain",
+            text: result,
+          }],
+        }
+      }
+    })
   }
 
   private registerQueryTool() {
@@ -175,6 +167,8 @@ class AdxMcpServer {
   }
 
   async connect() {
+    config()
+
     const envSchema = z.object({
       ADX_CLUSTER_NAME: z.string().min(1, "Cluster name is required"),
       ADX_CLIENT_ID: z.string().min(1, "Client ID is required"),

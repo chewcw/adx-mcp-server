@@ -1,14 +1,22 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { Client, KustoConnectionStringBuilder } from "azure-kusto-data"
 import { z } from "zod"
 import sqlite3 from "sqlite3"
 import { promisify } from "util"
+import { config } from "dotenv"
 
 class AdxMcpServer {
   private server: any
   private client: Client | null = null
   private dbPath: string = "/workspace/rnd/mcp/adx-mcp-server/store.sqlite"
+  private UriSchema = z.object({
+    href: z.string(),
+  })
+  private ResourceTemplateSchema = z.object({
+    db: z.string(),
+    table: z.string(),
+  })
 
   constructor() {
     this.server = new McpServer(
@@ -27,32 +35,32 @@ class AdxMcpServer {
   }
 
   initialize() {
-    this.registerSchemaResource()
+    this.registerSchemaResourceTemplate()
     this.registerConfigResource()
     this.registerQueryTool()
     return this
   }
 
-  private registerSchemaResource() {
+  private registerSchemaResourceTemplate() {
     this.server.resource(
       "schema",
-      "schema://main",
-      async (uri: { href: string }) => {
-        const db = this.getDb()
-        try {
-          const tables = await db.all(
-            "SELECT sql FROM sqlite_master WHERE type='table'",
-          )
-          return {
-            contents: [{
-              uri: uri.href,
-              text: tables.map((t: { sql: string }) => t.sql).join("\n"),
-            }],
-          }
-        } finally {
-          await db.close()
+      new ResourceTemplate("schema://adx/{db}/{table}", { list: undefined }),
+      async (uri: z.infer<typeof this.UriSchema>, data: z.infer<typeof this.ResourceTemplateSchema>) => {
+        if (!this.client) {
+          throw new Error("Client is not initialized")
         }
-      },
+        const query = `${data.table} | getschema`
+        const response = await this.client.execute(data.db, query)
+        const result = response.primaryResults[0].toString()
+        return {
+          contents: [{
+            uri: uri.href,
+            name: `Schema of the table ${data.table}`,
+            mimeType: "text/plain",
+            text: result,
+          }],
+        }
+      }
     )
   }
 
@@ -90,32 +98,32 @@ class AdxMcpServer {
   }
 
   private registerQueryTool() {
-    this.server.tool(
-      "query",
-      { sql: z.string() },
-      async ({ sql }: { sql: string }) => {
-        const db = this.getDb()
-        try {
-          const result = await db.all(sql)
-          return {
-            contents: [{
-              type: "text",
-              text: JSON.stringify(result, null, 2),
-            }],
-          }
-        } catch (err: unknown) {
-          return {
-            contents: [{
-              type: "text",
-              text: `Error: ${err}`,
-            }],
-            isError: true,
-          }
-        } finally {
-          await db.close()
-        }
-      }
-    )
+    // this.server.tool(
+    //   "query",
+    //   { sql: z.string() },
+    //   async ({ sql }: { sql: string }) => {
+    //     const db = this.getDb()
+    //     try {
+    //       const result = await db.all(sql)
+    //       return {
+    //         contents: [{
+    //           type: "text",
+    //           text: JSON.stringify(result, null, 2),
+    //         }],
+    //       }
+    //     } catch (err: unknown) {
+    //       return {
+    //         contents: [{
+    //           type: "text",
+    //           text: `Error: ${err}`,
+    //         }],
+    //         isError: true,
+    //       }
+    //     } finally {
+    //       await db.close()
+    //     }
+    //   }
+    // )
   }
 
   private registerNotification() {
@@ -131,15 +139,9 @@ class AdxMcpServer {
     ]
   }
 
-  getDb() {
-    const db = new sqlite3.Database(this.dbPath)
-    return {
-      all: promisify<string, any[]>(db.all.bind(db)),
-      close: promisify(db.close.bind(db)),
-    }
-  }
-
   async connect() {
+    config()
+
     const envSchema = z.object({
       ADX_CLUSTER_NAME: z.string().min(1, "Cluster name is required"),
       ADX_CLIENT_ID: z.string().min(1, "Client ID is required"),
