@@ -2,20 +2,21 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { Client, KustoConnectionStringBuilder } from "azure-kusto-data"
 import { z } from "zod"
-import sqlite3 from "sqlite3"
-import { promisify } from "util"
 import { config } from "dotenv"
 
 class AdxMcpServer {
   private server: any
   private client: Client | null = null
-  private dbPath: string = "/workspace/rnd/mcp/adx-mcp-server/store.sqlite"
   private UriSchema = z.object({
     href: z.string(),
   })
   private ResourceTemplateSchema = z.object({
     db: z.string(),
     table: z.string(),
+  })
+  private QueryToolSchema = z.object({
+    db: z.string(),
+    query: z.string(),
   })
 
   constructor() {
@@ -98,32 +99,25 @@ class AdxMcpServer {
   }
 
   private registerQueryTool() {
-    // this.server.tool(
-    //   "query",
-    //   { sql: z.string() },
-    //   async ({ sql }: { sql: string }) => {
-    //     const db = this.getDb()
-    //     try {
-    //       const result = await db.all(sql)
-    //       return {
-    //         contents: [{
-    //           type: "text",
-    //           text: JSON.stringify(result, null, 2),
-    //         }],
-    //       }
-    //     } catch (err: unknown) {
-    //       return {
-    //         contents: [{
-    //           type: "text",
-    //           text: `Error: ${err}`,
-    //         }],
-    //         isError: true,
-    //       }
-    //     } finally {
-    //       await db.close()
-    //     }
-    //   }
-    // )
+    this.server.tool(
+      "query",
+      { query: z.string(), db: z.string() },
+      async (data: z.infer<typeof this.QueryToolSchema>) => {
+        if (!this.client) {
+          throw new Error("Client is not initialized")
+        }
+        const query = data.query
+        const db = data.db
+        const response = await this.client.execute(db, query)
+        const result = response.primaryResults[0].toString()
+        return {
+          contents: [{
+            type: "text",
+            text: result,
+          }],
+        }
+      }
+    )
   }
 
   private registerNotification() {
