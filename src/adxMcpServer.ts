@@ -12,7 +12,7 @@ class AdxMcpServer {
   })
   private ResourceTemplateSchema = z.object({
     db: z.string(),
-    table: z.string(),
+    table: z.string().optional(),
   })
   private QueryToolSchema = z.object({
     db: z.string(),
@@ -44,19 +44,65 @@ class AdxMcpServer {
 
   private registerSchemaResourceTemplate() {
     this.server.resource(
-      "schema",
+      "Schema of the db",
+      new ResourceTemplate("schema://adx/{db}", { list: undefined }),
+      async (uri: z.infer<typeof this.UriSchema>, data: z.infer<typeof this.ResourceTemplateSchema>) => {
+        if (!this.client) {
+          throw new Error("Client is not initialized")
+        }
+        if (!data.table) {
+          const query = `.show tables`
+          const response = await this.client.execute(data.db, query)
+          const result = response.primaryResults[0].toString()
+          return {
+            contents: [{
+              uri: uri.href,
+              name: `List down all tables in the db ${data.db}`,
+              mimeType: "text/plain",
+              text: result,
+            }],
+          }
+        }
+      }
+    )
+
+    this.server.resource(
+      "Schema of the table",
       new ResourceTemplate("schema://adx/{db}/{table}", { list: undefined }),
       async (uri: z.infer<typeof this.UriSchema>, data: z.infer<typeof this.ResourceTemplateSchema>) => {
         if (!this.client) {
           throw new Error("Client is not initialized")
         }
-        const query = `${data.table} | getschema`
+        if (data.table) {
+          const query = `${data.table} | getschema`
+          const response = await this.client.execute(data.db, query)
+          const result = response.primaryResults[0].toString()
+          return {
+            contents: [{
+              uri: uri.href,
+              name: `Schema of the table ${data.table}`,
+              mimeType: "text/plain",
+              text: result,
+            }],
+          }
+        }
+      }
+    )
+
+    this.server.resource(
+      "Functions of the db",
+      new ResourceTemplate("functions://adx/{db}/functions", { list: undefined }),
+      async (uri: z.infer<typeof this.UriSchema>, data: z.infer<typeof this.ResourceTemplateSchema>) => {
+        if (!this.client) {
+          throw new Error("Client is not initialized")
+        }
+        const query = `.show functions`
         const response = await this.client.execute(data.db, query)
         const result = response.primaryResults[0].toString()
         return {
           contents: [{
             uri: uri.href,
-            name: `Schema of the table ${data.table}`,
+            name: `List down all functions in the db ${data.db}`,
             mimeType: "text/plain",
             text: result,
           }],
@@ -85,7 +131,7 @@ class AdxMcpServer {
             {
               uri: "config://azure-data-explorer-creds/client-secret",
               name: "Client Secret",
-              text: `${process.env.ADX_CLIENT_SECRET}`,
+              text: `${process.env.ADX_CLIENT_SECRET ? "******" : "Not set"}`,
             },
             {
               uri: "config://azure-data-explorer-creds/tenant-id",

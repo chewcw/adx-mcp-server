@@ -4,7 +4,11 @@ import { Client, KustoConnectionStringBuilder } from "azure-kusto-data"
 import { z } from "zod"
 import sqlite3 from "sqlite3"
 import { promisify } from "util"
-import { ListResourcesRequestSchema, ListResourceTemplatesRequestSchema, ReadResourceRequestSchema, Resource } from "@modelcontextprotocol/sdk/types.js"
+import {
+  ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
+  ReadResourceRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js"
 import { config } from "dotenv"
 
 class AdxMcpServer {
@@ -48,7 +52,7 @@ class AdxMcpServer {
       }
     })
 
-    this.server.setRequestHandler(ReadResourceRequestSchema, async (request: { params: { uri: any } }) => {
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request: z.infer<typeof ReadResourceRequestSchema>) => {
       const uri = request.params.uri
 
       if (uri.startsWith("config://azure-data-explorer-creds")) {
@@ -67,7 +71,7 @@ class AdxMcpServer {
             {
               uri: "config://azure-data-explorer-creds/client-secret",
               name: "Client Secret",
-              text: `${process.env.ADX_CLIENT_SECRET}`,
+              text: `${process.env.ADX_CLIENT_SECRET ? "******" : "Not set"}`,
             },
             {
               uri: "config://azure-data-explorer-creds/tenant-id",
@@ -85,21 +89,70 @@ class AdxMcpServer {
       return {
         resourceTemplates: [
           {
+            uriTemplate: "schema://adx/{db}",
+            name: "Schema of the db",
+            description: "List down the tables in the given db",
+          },
+          {
             uriTemplate: "schema://adx/{db}/{table}",
-            name: "Schema",
+            name: "Schema of the table",
             description: "Schema of the given db and table",
+          },
+          {
+            uriTemplate: "schema://adx/{db}/functions",
+            name: "Functions of the db",
+            description: "List all functions of the given db",
           },
         ]
       }
     })
 
-    this.server.setRequestHandler(ReadResourceRequestSchema, async (request: { params: { uri: any } }) => {
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request: z.infer<typeof ReadResourceRequestSchema>) => {
       const uri = request.params.uri
-      if (uri.startsWith("schema://adx")) {
+      const showTablesRegex = /schema:\/\/adx\/\w+$/
+      if (showTablesRegex.test(uri)) {
+        const db = uri.split("/")[3]
+        if (!this.client) {
+          throw new Error("Database client is not initialized")
+        }
+        if (!db) {
+          return {
+            contents: [{
+              uri: uri,
+              name: "Error",
+              mimeType: "text/plain",
+              text: "Invalid URI",
+            }],
+          }
+        }
+        const query = `.show tables`
+        const response = await this.client.execute(db, query)
+        const result = response.primaryResults[0].toString()
+        return {
+          contents: [{
+            uri: uri,
+            name: `Schema of the db ${db}`,
+            mimeType: "text/plain",
+            text: result,
+          }],
+        }
+      }
+      const showTableSchemaRegex = /schema:\/\/adx\/\w+\/\w+$/
+      if (showTableSchemaRegex.test(uri)) {
         const db = uri.split("/")[3]
         const table = uri.split("/")[4]
         if (!this.client) {
           throw new Error("Database client is not initialized")
+        }
+        if (!db || !table) {
+          return {
+            contents: [{
+              uri: uri,
+              name: "Error",
+              mimeType: "text/plain",
+              text: "Invalid URI",
+            }],
+          }
         }
         const query = `${table} | getschema`
         const response = await this.client.execute(db, query)
@@ -108,6 +161,34 @@ class AdxMcpServer {
           contents: [{
             uri: uri,
             name: `Schema of the table ${table}`,
+            mimeType: "text/plain",
+            text: result,
+          }],
+        }
+      }
+      const showFunctionsRegex = /schema:\/\/adx\/\w+\/functions$/
+      if (showFunctionsRegex.test(uri)) {
+        const db = uri.split("/")[3]
+        if (!this.client) {
+          throw new Error("Database client is not initialized")
+        }
+        const query = `.show functions`
+        const response = await this.client.execute(db, query)
+        const result = response.primaryResults[0].toString()
+        if (!db) {
+          return {
+            contents: [{
+              uri: uri,
+              name: "Error",
+              mimeType: "text/plain",
+              text: "Invalid URI",
+            }],
+          }
+        }
+        return {
+          contents: [{
+            uri: uri,
+            name: `Functions of the db ${db}`,
             mimeType: "text/plain",
             text: result,
           }],
