@@ -3,17 +3,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { Client, KustoConnectionStringBuilder } from "azure-kusto-data"
 import { z } from "zod"
 import { config } from "dotenv"
+import { Variables } from "@modelcontextprotocol/sdk/shared/uriTemplate.js"
+import { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js"
 
 class AdxMcpServer {
-  private server: any
+  private server: McpServer
   private client: Client | null = null
-  private UriSchema = z.object({
-    href: z.string(),
-  })
-  private ResourceTemplateSchema = z.object({
-    db: z.string(),
-    table: z.string().optional(),
-  })
   private QueryToolSchema = z.object({
     db: z.string(),
     query: z.string(),
@@ -46,68 +41,78 @@ class AdxMcpServer {
     this.server.resource(
       "Schema of the db",
       new ResourceTemplate("schema://adx/{db}", { list: undefined }),
-      async (uri: z.infer<typeof this.UriSchema>, data: z.infer<typeof this.ResourceTemplateSchema>) => {
+      async (uri: URL, variables: Variables, _extra: RequestHandlerExtra) => {
         if (!this.client) {
           throw new Error("Client is not initialized")
         }
-        if (!data.table) {
-          const query = `.show tables`
-          const response = await this.client.execute(data.db, query)
-          const result = response.primaryResults[0].toString()
-          return {
-            contents: [{
-              uri: uri.href,
-              name: `List down all tables in the db ${data.db}`,
-              mimeType: "text/plain",
-              text: result,
-            }],
-          }
+        
+        const query = `.show tables`
+        const response = await this.client.execute(String(variables.db), query)
+        const result = response.primaryResults[0].toString()
+        
+        return {
+          contents: [{
+            uri: uri.href,
+            name: `List down all tables in the db ${variables.db}`,
+            mimeType: "text/plain",
+            text: result,
+          }],
         }
-      }
+      },
     )
 
     this.server.resource(
       "Schema of the table",
       new ResourceTemplate("schema://adx/{db}/{table}", { list: undefined }),
-      async (uri: z.infer<typeof this.UriSchema>, data: z.infer<typeof this.ResourceTemplateSchema>) => {
+      async (uri: URL, variables: Variables, _extra: RequestHandlerExtra) => {
         if (!this.client) {
           throw new Error("Client is not initialized")
         }
-        if (data.table) {
-          const query = `${data.table} | getschema`
-          const response = await this.client.execute(data.db, query)
-          const result = response.primaryResults[0].toString()
+        
+        if (!variables.table) {
           return {
             contents: [{
               uri: uri.href,
-              name: `Schema of the table ${data.table}`,
+              text: "No table specified",
               mimeType: "text/plain",
-              text: result,
             }],
           }
         }
-      }
+        
+        const query = `${variables.table} | getschema`
+        const response = await this.client.execute(String(variables.db), query)
+        const result = response.primaryResults[0].toString()
+        
+        return {
+          contents: [{
+            uri: uri.href,
+            name: `Schema of the table ${variables.table}`,
+            mimeType: "text/plain",
+            text: result,
+          }],
+        }
+      },
     )
 
     this.server.resource(
       "Functions of the db",
       new ResourceTemplate("functions://adx/{db}/functions", { list: undefined }),
-      async (uri: z.infer<typeof this.UriSchema>, data: z.infer<typeof this.ResourceTemplateSchema>) => {
+      async (uri: URL, variables: Variables, extra: RequestHandlerExtra) => {
         if (!this.client) {
           throw new Error("Client is not initialized")
         }
         const query = `.show functions`
-        const response = await this.client.execute(data.db, query)
+        const response = await this.client.execute(String(variables.db), query)
         const result = response.primaryResults[0].toString()
         return {
           contents: [{
             uri: uri.href,
-            name: `List down all functions in the db ${data.db}`,
+            name: `List down all functions in the db ${String(variables.db)}`,
             mimeType: "text/plain",
             text: result,
           }],
         }
-      }
+      },
     )
   }
 
@@ -154,10 +159,10 @@ class AdxMcpServer {
         }
         const query = data.query
         const db = data.db
-        const response = await this.client.execute(db, query)
+        const response = await this.client.execute(String(db), String(query))
         const result = response.primaryResults[0].toString()
         return {
-          contents: [{
+          content: [{
             type: "text",
             text: result,
           }],
